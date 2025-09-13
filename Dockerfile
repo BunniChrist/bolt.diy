@@ -24,8 +24,8 @@ EXPOSE 5173
 # ========= Image production =========
 FROM base AS bolt-ai-production
 
-# ⚠️ Limiter/autoriser plus de RAM pour Node pendant le build
-ENV NODE_OPTIONS="--max-old-space-size=4096 --max-semi-space-size=128"
+# Autoriser plus de mémoire à Node pour le build (utilisera ta RAM + swap)
+ENV NODE_OPTIONS="--max-old-space-size=6144 --max-semi-space-size=128"
 
 # Variables optionnelles (passables en build-args)
 ARG GROQ_API_KEY
@@ -62,6 +62,14 @@ ENV WRANGLER_SEND_METRICS=false \
 # Désactiver les métriques Wrangler (comme l’original)
 RUN mkdir -p /root/.config/.wrangler && \
     echo '{"enabled":false}' > /root/.config/.wrangler/metrics.json
+
+# --- Build propre (évite les artefacts cassés .vite) ---
+# 1) nettoyer les caches Vite
+# 2) s'assurer que les deps sont bien présentes
+# 3) fournir un commit par défaut si .git absent
+RUN rm -rf node_modules/.vite .vite && \
+    pnpm prune --prod=false && pnpm install --frozen-lockfile --prefer-offline && \
+    echo "no-git-info" > .git-commit-version
 
 # Build (Remix + Vite)
 RUN pnpm run build
