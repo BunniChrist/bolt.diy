@@ -1,48 +1,95 @@
-# ---------- Base ----------
 ARG BASE=node:20.18.0
 FROM ${BASE} AS base
+
 WORKDIR /app
 
-# pnpm + outils utiles
-RUN npm i -g pnpm && \
-    apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/* || true
-
-# Eviter les hooks husky pendant l'install
-ENV HUSKY=0
-# Limiter la RAM de Node pendant install/build
-ENV NODE_OPTIONS="--max-old-space-size=2048"
-
-# Dépendances (cache tant que package.json/pnpm-lock.yaml ne changent pas)
+# Install dependencies (this step is cached as long as the dependencies don't change)
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --prefer-offline
 
-# Code
+#RUN npm install -g corepack@latest
+
+#RUN corepack enable pnpm && pnpm install
+RUN npm install -g pnpm && pnpm install
+
+# Copy the rest of your app's source code
 COPY . .
 
-# ---------- Build ----------
-FROM base AS build
-WORKDIR /app
-# ⚠️ Ne PAS passer --no-sourcemap à remix vite:build
+# Expose the port the app runs on
+EXPOSE 5173
+
+# Production image
+FROM base AS bolt-ai-production
+
+# Define environment variables with default values or let them be overridden
+ARG GROQ_API_KEY
+ARG HuggingFace_API_KEY
+ARG OPENAI_API_KEY
+ARG ANTHROPIC_API_KEY
+ARG OPEN_ROUTER_API_KEY
+ARG GOOGLE_GENERATIVE_AI_API_KEY
+ARG OLLAMA_API_BASE_URL
+ARG XAI_API_KEY
+ARG TOGETHER_API_KEY
+ARG TOGETHER_API_BASE_URL
+ARG AWS_BEDROCK_CONFIG
+ARG VITE_LOG_LEVEL=debug
+ARG DEFAULT_NUM_CTX
+
+ENV WRANGLER_SEND_METRICS=false \
+    GROQ_API_KEY=${GROQ_API_KEY} \
+    HuggingFace_KEY=${HuggingFace_API_KEY} \
+    OPENAI_API_KEY=${OPENAI_API_KEY} \
+    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
+    OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY} \
+    GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY} \
+    OLLAMA_API_BASE_URL=${OLLAMA_API_BASE_URL} \
+    XAI_API_KEY=${XAI_API_KEY} \
+    TOGETHER_API_KEY=${TOGETHER_API_KEY} \
+    TOGETHER_API_BASE_URL=${TOGETHER_API_BASE_URL} \
+    AWS_BEDROCK_CONFIG=${AWS_BEDROCK_CONFIG} \
+    VITE_LOG_LEVEL=${VITE_LOG_LEVEL} \
+    DEFAULT_NUM_CTX=${DEFAULT_NUM_CTX}\
+    RUNNING_IN_DOCKER=true
+
+# Pre-configure wrangler to disable metrics
+RUN mkdir -p /root/.config/.wrangler && \
+    echo '{"enabled":false}' > /root/.config/.wrangler/metrics.json
+
 RUN pnpm run build
 
-# ---------- Runtime ----------
-FROM ${BASE} AS runtime
-WORKDIR /app
+CMD [ "pnpm", "run", "dockerstart"]
 
-# pnpm pour exécuter les scripts
-RUN npm i -g pnpm
+# Development image
+FROM base AS bolt-ai-development
 
-# Copier l'app buildée (inclut ./build et node_modules nécessaires à wrangler)
-COPY --from=build /app /app
+# Define the same environment variables for development
+ARG GROQ_API_KEY
+ARG HuggingFace 
+ARG OPENAI_API_KEY
+ARG ANTHROPIC_API_KEY
+ARG OPEN_ROUTER_API_KEY
+ARG GOOGLE_GENERATIVE_AI_API_KEY
+ARG OLLAMA_API_BASE_URL
+ARG XAI_API_KEY
+ARG TOGETHER_API_KEY
+ARG TOGETHER_API_BASE_URL
+ARG VITE_LOG_LEVEL=debug
+ARG DEFAULT_NUM_CTX
 
-# Variables (tu peux en définir d'autres dans Coolify)
-ENV NODE_ENV=production
-ENV WRANGLER_SEND_METRICS=false
-ENV PORT=3000
+ENV GROQ_API_KEY=${GROQ_API_KEY} \
+    HuggingFace_API_KEY=${HuggingFace_API_KEY} \
+    OPENAI_API_KEY=${OPENAI_API_KEY} \
+    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
+    OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY} \
+    GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY} \
+    OLLAMA_API_BASE_URL=${OLLAMA_API_BASE_URL} \
+    XAI_API_KEY=${XAI_API_KEY} \
+    TOGETHER_API_KEY=${TOGETHER_API_KEY} \
+    TOGETHER_API_BASE_URL=${TOGETHER_API_BASE_URL} \
+    AWS_BEDROCK_CONFIG=${AWS_BEDROCK_CONFIG} \
+    VITE_LOG_LEVEL=${VITE_LOG_LEVEL} \
+    DEFAULT_NUM_CTX=${DEFAULT_NUM_CTX}\
+    RUNNING_IN_DOCKER=true
 
-# Port public
-EXPOSE 3000
-
-# Démarrage : équivalent de "dockerstart" mais sur 3000
-# (wrangler pages dev ./build/client + bindings)
-CMD sh -lc 'bindings=$(./bindings.sh) && wrangler pages dev ./build/client $bindings --ip 0.0.0.0 --port $PORT --no-show-interactive-dev-session'
+RUN mkdir -p ${WORKDIR}/run
+CMD pnpm run dev --host
