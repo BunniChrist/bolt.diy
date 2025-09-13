@@ -1,95 +1,42 @@
-ARG BASE=node:20.18.0
-FROM ${BASE} AS base
-
+# ---------- Build stage ----------
+FROM node:20-alpine AS builder
 WORKDIR /app
 
-# Install dependencies (this step is cached as long as the dependencies don't change)
-COPY package.json pnpm-lock.yaml ./
+# Outils utiles pour certains packages natifs
+RUN apk add --no-cache git libc6-compat
 
-#RUN npm install -g corepack@latest
+# pnpm
+RUN npm i -g pnpm
 
-#RUN corepack enable pnpm && pnpm install
-RUN npm install -g pnpm && pnpm install
+# Limiter la RAM de Node pendant install/build (2 Go)
+ENV NODE_OPTIONS="--max-old-space-size=2048"
+ENV NODE_ENV=production
 
-# Copy the rest of your app's source code
+# Dépendances
+COPY package.json pnpm-lock.yaml* ./
+# Utilise le cache pnpm si possible, et fige la lockfile
+RUN pnpm install --frozen-lockfile --prefer-offline
+
+# Sources & build
 COPY . .
+# Build Vite plus léger (pas de sourcemap -> moins de RAM)
+RUN pnpm run build -- --no-sourcemap
 
-# Expose the port the app runs on
-EXPOSE 5173
 
-# Production image
-FROM base AS bolt-ai-production
+# ---------- Runtime stage ----------
+FROM node:20-alpine AS runner
+WORKDIR /app
 
-# Define environment variables with default values or let them be overridden
-ARG GROQ_API_KEY
-ARG HuggingFace_API_KEY
-ARG OPENAI_API_KEY
-ARG ANTHROPIC_API_KEY
-ARG OPEN_ROUTER_API_KEY
-ARG GOOGLE_GENERATIVE_AI_API_KEY
-ARG OLLAMA_API_BASE_URL
-ARG XAI_API_KEY
-ARG TOGETHER_API_KEY
-ARG TOGETHER_API_BASE_URL
-ARG AWS_BEDROCK_CONFIG
-ARG VITE_LOG_LEVEL=debug
-ARG DEFAULT_NUM_CTX
+# pnpm pour exécuter les scripts
+RUN npm i -g pnpm
 
-ENV WRANGLER_SEND_METRICS=false \
-    GROQ_API_KEY=${GROQ_API_KEY} \
-    HuggingFace_KEY=${HuggingFace_API_KEY} \
-    OPENAI_API_KEY=${OPENAI_API_KEY} \
-    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY} \
-    GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY} \
-    OLLAMA_API_BASE_URL=${OLLAMA_API_BASE_URL} \
-    XAI_API_KEY=${XAI_API_KEY} \
-    TOGETHER_API_KEY=${TOGETHER_API_KEY} \
-    TOGETHER_API_BASE_URL=${TOGETHER_API_BASE_URL} \
-    AWS_BEDROCK_CONFIG=${AWS_BEDROCK_CONFIG} \
-    VITE_LOG_LEVEL=${VITE_LOG_LEVEL} \
-    DEFAULT_NUM_CTX=${DEFAULT_NUM_CTX}\
-    RUNNING_IN_DOCKER=true
+# On copie tout depuis le builder (inclut dist/ et node_modules/
+# -> nécessaire car `vite preview` est une devDependency)
+COPY --from=builder /app ./
 
-# Pre-configure wrangler to disable metrics
-RUN mkdir -p /root/.config/.wrangler && \
-    echo '{"enabled":false}' > /root/.config/.wrangler/metrics.json
+# Le serveur écoutera en 0.0.0.0:3000
+ENV PORT=3000
+EXPOSE 3000
 
-RUN pnpm run build
-
-CMD [ "pnpm", "run", "dockerstart"]
-
-# Development image
-FROM base AS bolt-ai-development
-
-# Define the same environment variables for development
-ARG GROQ_API_KEY
-ARG HuggingFace 
-ARG OPENAI_API_KEY
-ARG ANTHROPIC_API_KEY
-ARG OPEN_ROUTER_API_KEY
-ARG GOOGLE_GENERATIVE_AI_API_KEY
-ARG OLLAMA_API_BASE_URL
-ARG XAI_API_KEY
-ARG TOGETHER_API_KEY
-ARG TOGETHER_API_BASE_URL
-ARG VITE_LOG_LEVEL=debug
-ARG DEFAULT_NUM_CTX
-
-ENV GROQ_API_KEY=${GROQ_API_KEY} \
-    HuggingFace_API_KEY=${HuggingFace_API_KEY} \
-    OPENAI_API_KEY=${OPENAI_API_KEY} \
-    ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    OPEN_ROUTER_API_KEY=${OPEN_ROUTER_API_KEY} \
-    GOOGLE_GENERATIVE_AI_API_KEY=${GOOGLE_GENERATIVE_AI_API_KEY} \
-    OLLAMA_API_BASE_URL=${OLLAMA_API_BASE_URL} \
-    XAI_API_KEY=${XAI_API_KEY} \
-    TOGETHER_API_KEY=${TOGETHER_API_KEY} \
-    TOGETHER_API_BASE_URL=${TOGETHER_API_BASE_URL} \
-    AWS_BEDROCK_CONFIG=${AWS_BEDROCK_CONFIG} \
-    VITE_LOG_LEVEL=${VITE_LOG_LEVEL} \
-    DEFAULT_NUM_CTX=${DEFAULT_NUM_CTX}\
-    RUNNING_IN_DOCKER=true
-
-RUN mkdir -p ${WORKDIR}/run
-CMD pnpm run dev --host
+# Serveur "prod-like" de Vite (pas le mode dev)
+CMD ["pnpm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "3000"]
